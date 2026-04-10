@@ -338,3 +338,88 @@ public final class marble_run {
             BetKind kind,
             int lanes,
             int depth,
+            int marbles,
+            RiskClass riskClass,
+            BigDecimal stake,
+            Instant placedAt,
+            String commit,
+            String memo,
+            Map<String, String> tags
+        ) {
+            this.betId = betId;
+            this.playerId = playerId;
+            this.kind = kind;
+            this.lanes = lanes;
+            this.depth = depth;
+            this.marbles = marbles;
+            this.riskClass = riskClass;
+            this.stake = stake;
+            this.placedAt = placedAt;
+            this.commit = commit;
+            this.memo = memo;
+            this.tags = tags;
+        }
+
+        @Override public String toString() {
+            return "Bet{betId='" + betId + "', playerId='" + playerId + "', kind=" + kind +
+                ", lanes=" + lanes + ", depth=" + depth + ", marbles=" + marbles + ", risk=" + riskClass +
+                ", stake=" + stake + ", settled=" + settled + ", cancelled=" + cancelled + ", payout=" + payout + "}";
+        }
+    }
+
+    public static final class ProposedBet {
+        public final BetKind kind;
+        public final int lanes;
+        public final int depth;
+        public final int marbles;
+        public final RiskClass risk;
+        public final BigDecimal stake;
+        public final String memo;
+        public final Map<String, String> tags;
+
+        public ProposedBet(BetKind kind, int lanes, int depth, int marbles, RiskClass risk, BigDecimal stake, String memo, Map<String, String> tags) {
+            this.kind = kind;
+            this.lanes = lanes;
+            this.depth = depth;
+            this.marbles = marbles;
+            this.risk = risk;
+            this.stake = stake;
+            this.memo = memo;
+            this.tags = tags;
+        }
+    }
+
+    public static final class Trace {
+        public final String commitHex;
+        public final String revealB64;
+        public final byte[] revealBytes;
+        public Trace(String commitHex, String revealB64, byte[] revealBytes) {
+            this.commitHex = commitHex;
+            this.revealB64 = revealB64;
+            this.revealBytes = revealBytes;
+        }
+    }
+
+    // RNG and hash helpers
+    public interface TraceRng {
+        byte[] nextBytes(int n);
+        int nextInt(int bound);
+        long nextLong();
+        String name();
+    }
+
+    public static final class SecureTraceRng implements TraceRng {
+        private final SecureRandom sr;
+        private final byte[] personalization;
+        private final String label;
+
+        public SecureTraceRng(byte[] seed, byte[] personalization, String label) {
+            this.sr = new SecureRandom(sha256(concat(seed, personalization)));
+            this.personalization = personalization == null ? new byte[0] : personalization.clone();
+            this.label = label == null ? "SecureTraceRng" : label;
+        }
+
+        @Override public byte[] nextBytes(int n) {
+            byte[] b = new byte[n];
+            sr.nextBytes(b);
+            return b;
