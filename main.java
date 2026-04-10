@@ -253,3 +253,88 @@ public final class marble_run {
         private BigDecimal rebatePool;
 
         private BigDecimal sessionProfit;
+        private BigDecimal grossStakes;
+        private BigDecimal grossPayouts;
+
+        private final Deque<BigDecimal> payoutWindow = new ArrayDeque<>(32);
+        private BigDecimal payoutWindowSum = money("0.00");
+
+        public House(BigDecimal initialBankroll) {
+            this.bankroll = nz(initialBankroll);
+            this.treasury = money("0.00");
+            this.jackpot = money("0.00");
+            this.rebatePool = money("0.00");
+            this.sessionProfit = money("0.00");
+            this.grossStakes = money("0.00");
+            this.grossPayouts = money("0.00");
+        }
+
+        public BigDecimal bankroll() { return bankroll; }
+        public BigDecimal treasury() { return treasury; }
+        public BigDecimal jackpot() { return jackpot; }
+        public BigDecimal rebatePool() { return rebatePool; }
+        public BigDecimal sessionProfit() { return sessionProfit; }
+        public BigDecimal grossStakes() { return grossStakes; }
+        public BigDecimal grossPayouts() { return grossPayouts; }
+        public BigDecimal payoutWindowSum() { return payoutWindowSum; }
+
+        private void addBankroll(BigDecimal x) { bankroll = bankroll.add(x, MC); }
+        private void subBankroll(BigDecimal x) { bankroll = bankroll.subtract(x, MC); }
+        private void addTreasury(BigDecimal x) { treasury = treasury.add(x, MC); }
+        private void addJackpot(BigDecimal x) { jackpot = jackpot.add(x, MC); }
+        private void addRebatePool(BigDecimal x) { rebatePool = rebatePool.add(x, MC); }
+        private void subRebatePool(BigDecimal x) { rebatePool = rebatePool.subtract(x, MC); }
+        private void addStakes(BigDecimal x) { grossStakes = grossStakes.add(x, MC); }
+        private void addPayouts(BigDecimal x) { grossPayouts = grossPayouts.add(x, MC); }
+        private void addProfit(BigDecimal x) { sessionProfit = sessionProfit.add(x, MC); }
+
+        private void pushPayout(BigDecimal x) {
+            if (payoutWindow.size() == 32) {
+                BigDecimal old = payoutWindow.removeFirst();
+                payoutWindowSum = payoutWindowSum.subtract(old, MC);
+            }
+            payoutWindow.addLast(x);
+            payoutWindowSum = payoutWindowSum.add(x, MC);
+        }
+
+        @Override public String toString() {
+            return "House{bankroll=" + bankroll + ", treasury=" + treasury + ", jackpot=" + jackpot +
+                ", rebatePool=" + rebatePool + ", sessionProfit=" + sessionProfit +
+                ", stakes=" + grossStakes + ", payouts=" + grossPayouts + ", window=" + payoutWindowSum + "}";
+        }
+    }
+
+    // Bets / traces
+    public static final class Bet {
+        public final String betId;
+        public final String playerId;
+        public final BetKind kind;
+        public final int lanes;
+        public final int depth;
+        public final int marbles;
+        public final RiskClass riskClass;
+        public final BigDecimal stake;
+        public final Instant placedAt;
+        public final String commit;
+        public final String memo;
+        public final Map<String, String> tags;
+
+        public boolean settled;
+        public boolean cancelled;
+        public Instant settledAt;
+        public BigDecimal payout;
+        public BigDecimal houseEdgeTaken;
+        public BigDecimal treasuryFee;
+        public BigDecimal jackpotFee;
+        public BigDecimal rebateFee;
+        public String resultLane;
+        public String traceHash;
+        public String reveal;
+        public String tableDigest;
+
+        private Bet(
+            String betId,
+            String playerId,
+            BetKind kind,
+            int lanes,
+            int depth,
