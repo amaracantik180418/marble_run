@@ -678,3 +678,88 @@ public final class marble_run {
                 case NORMAL: return bd("0.66").add(bd(rng.nextInt(91)).divide(bd("1000"), MC), MC);
                 case AGGRESSIVE: return bd("0.54").add(bd(rng.nextInt(101)).divide(bd("1000"), MC), MC);
                 case CHAOTIC: return bd("0.47").add(bd(rng.nextInt(141)).divide(bd("1000"), MC), MC);
+                default: return bd("0.62");
+            }
+        }
+
+        private static BigDecimal pickWingBoost(RiskClass r, TraceRng rng) {
+            switch (r) {
+                case CONSERVATIVE: return bd("0.16").add(bd(rng.nextInt(61)).divide(bd("1000"), MC), MC);
+                case NORMAL: return bd("0.28").add(bd(rng.nextInt(81)).divide(bd("1000"), MC), MC);
+                case AGGRESSIVE: return bd("0.44").add(bd(rng.nextInt(101)).divide(bd("1000"), MC), MC);
+                case CHAOTIC: return bd("0.57").add(bd(rng.nextInt(131)).divide(bd("1000"), MC), MC);
+                default: return bd("0.30");
+            }
+        }
+
+        private static BigDecimal pickCurve(RiskClass r, TraceRng rng) {
+            BigDecimal jitter = bd(rng.nextInt(121)).divide(bd("10000"), MC); // 0..0.0120
+            switch (r) {
+                case CONSERVATIVE: return bd("0.023").add(jitter, MC);
+                case NORMAL: return bd("0.040").add(jitter, MC);
+                case AGGRESSIVE: return bd("0.061").add(jitter, MC);
+                case CHAOTIC: return bd("0.083").add(jitter, MC);
+                default: return bd("0.045");
+            }
+        }
+
+        private static BigDecimal pickSpikeBump(RiskClass r, TraceRng rng) {
+            BigDecimal j = bd(rng.nextInt(161)).divide(bd("1000"), MC); // 0..0.160
+            switch (r) {
+                case CONSERVATIVE: return bd("0.11").add(j, MC);
+                case NORMAL: return bd("0.19").add(j, MC);
+                case AGGRESSIVE: return bd("0.30").add(j, MC);
+                case CHAOTIC: return bd("0.39").add(j, MC);
+                default: return bd("0.20");
+            }
+        }
+    }
+
+    // Risk policy
+    public interface RiskPolicy {
+        Decision evaluate(House house, Player player, ProposedBet pb);
+        String name();
+    }
+
+    public static final class Decision {
+        public final boolean ok;
+        public final String reason;
+        private Decision(boolean ok, String reason) { this.ok = ok; this.reason = reason; }
+        public static Decision ok() { return new Decision(true, "ok"); }
+        public static Decision no(String r) { return new Decision(false, r == null ? "rejected" : r); }
+        @Override public String toString() { return ok ? "Decision{ok}" : "Decision{no:" + reason + "}"; }
+    }
+
+    public static final class GuardrailRiskPolicy implements RiskPolicy {
+        private final BigDecimal maxExposureFraction;
+        private final BigDecimal maxSingleBetPayout;
+        private final BigDecimal maxWindowPayout;
+        private final String label;
+        private final int chaosDisableBalanceGateCents;
+
+        public GuardrailRiskPolicy(BigDecimal maxExposureFraction, BigDecimal maxSingleBetPayout, BigDecimal maxWindowPayout, int chaosDisableBalanceGateCents, String label) {
+            this.maxExposureFraction = clamp(nz(maxExposureFraction), bd("0.05"), bd("0.80"));
+            this.maxSingleBetPayout = clamp(nz(maxSingleBetPayout), money("100.00"), money("500000.00"));
+            this.maxWindowPayout = clamp(nz(maxWindowPayout), money("2000.00"), money("2000000.00"));
+            this.chaosDisableBalanceGateCents = Math.max(10000, Math.min(50000000, chaosDisableBalanceGateCents));
+            this.label = label == null ? "GuardrailRiskPolicy" : label;
+        }
+
+        @Override public Decision evaluate(House house, Player player, ProposedBet pb) {
+            BigDecimal br = house.bankroll();
+            if (br.compareTo(money("0.00")) <= 0) return Decision.no("house bankroll depleted");
+
+            BigDecimal worst = pb.stake.multiply(MAX_PAYOUT_MULT, MC);
+            BigDecimal exposureCap = br.multiply(maxExposureFraction, MC);
+            if (worst.compareTo(exposureCap) > 0) return Decision.no("worst-case exposure too large");
+            if (worst.compareTo(maxSingleBetPayout) > 0) return Decision.no("worst-case payout cap exceeded");
+
+            if (house.payoutWindowSum().add(worst, MC).compareTo(maxWindowPayout) > 0) return Decision.no("payout window saturated");
+
+            long balCents = toCents(player.balance());
+            if (pb.risk == RiskClass.CHAOTIC && balCents > chaosDisableBalanceGateCents) {
+                return Decision.no("chaotic mode disabled for large balances");
+            }
+
+            if (player.balance().add(worst, MC).compareTo(MAX_PLAYER_BALANCE) > 0) {
+                return Decision.no("balance cap guardrail");
