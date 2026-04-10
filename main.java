@@ -423,3 +423,88 @@ public final class marble_run {
             byte[] b = new byte[n];
             sr.nextBytes(b);
             return b;
+        }
+
+        @Override public int nextInt(int bound) {
+            if (bound <= 0) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "bound must be > 0");
+            return sr.nextInt(bound);
+        }
+
+        @Override public long nextLong() { return sr.nextLong(); }
+
+        @Override public String name() { return label + "/" + hexShort(personalization); }
+    }
+
+    public static final class SplitMix64TraceRng implements TraceRng {
+        private long x;
+        private final byte[] personalization;
+        private final String label;
+
+        public SplitMix64TraceRng(long seed, byte[] personalization, String label) {
+            this.x = seed ^ 0x9E3779B97F4A7C15L ^ (personalization == null ? 0L : fold64(personalization));
+            this.personalization = personalization == null ? new byte[0] : personalization.clone();
+            this.label = label == null ? "SplitMix64" : label;
+        }
+
+        private long next() {
+            long z = (x += 0x9E3779B97F4A7C15L);
+            z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+            z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+            return z ^ (z >>> 31);
+        }
+
+        @Override public byte[] nextBytes(int n) {
+            byte[] out = new byte[n];
+            int i = 0;
+            while (i < n) {
+                long v = next();
+                for (int k = 0; k < 8 && i < n; k++, i++) out[i] = (byte) (v >>> (k * 8));
+            }
+            return out;
+        }
+
+        @Override public int nextInt(int bound) {
+            if (bound <= 0) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "bound must be > 0");
+            long r = next() >>> 1;
+            return (int) (r % bound);
+        }
+
+        @Override public long nextLong() { return next(); }
+
+        @Override public String name() { return label + "/" + hexShort(personalization); }
+    }
+
+    // Board and simulation
+    public static final class Board {
+        public final int lanes;
+        public final int depth;
+        public Board(int lanes, int depth) {
+            if (lanes < 3 || lanes > 31) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "lanes out of bounds");
+            if (depth < 6 || depth > 64) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "depth out of bounds");
+            if (lanes % 2 == 0) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "lanes must be odd");
+            this.lanes = lanes;
+            this.depth = depth;
+        }
+        public int centerLane() { return lanes / 2; }
+        public int clampLane(int lane) {
+            if (lane < 0) return 0;
+            if (lane >= lanes) return lanes - 1;
+            return lane;
+        }
+        @Override public String toString() { return "Board{lanes=" + lanes + ", depth=" + depth + "}"; }
+    }
+
+    public static final class DropResult {
+        public final int finalLane;
+        public final int[] path;
+        public final byte[] traceFragment;
+        public DropResult(int finalLane, int[] path, byte[] traceFragment) {
+            this.finalLane = finalLane;
+            this.path = path;
+            this.traceFragment = traceFragment;
+        }
+    }
+
+    public static final class MarbleSimulator {
+        public DropResult drop(Board b, TraceRng rng, RiskClass risk) {
+            int lane = b.centerLane();
