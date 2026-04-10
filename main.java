@@ -593,3 +593,88 @@ public final class marble_run {
         }
 
         private static String digestOf(BigDecimal[] mult) {
+            byte[] b = new byte[mult.length * 8];
+            for (int i = 0; i < mult.length; i++) {
+                long bits = Double.doubleToLongBits(mult[i].doubleValue());
+                for (int k = 0; k < 8; k++) b[i * 8 + k] = (byte) (bits >>> (k * 8));
+            }
+            return hex(sha256(b));
+        }
+
+        public static PayoutTable build(Board board, RiskClass risk, TraceRng rng) {
+            int lanes = board.lanes;
+            int c = lanes / 2;
+
+            BigDecimal[] raw = new BigDecimal[lanes];
+            for (int i = 0; i < lanes; i++) raw[i] = bd("0");
+
+            BigDecimal baseCenter = pickBaseCenter(risk, rng);
+            BigDecimal wingBoost = pickWingBoost(risk, rng);
+            BigDecimal curve = pickCurve(risk, rng);
+            BigDecimal micro = bd(rng.nextInt(97)).divide(bd("10000"), MC); // 0..0.0096
+
+            for (int i = 0; i < lanes; i++) {
+                int d = Math.abs(i - c);
+                BigDecimal dd = bd(Integer.toString(d));
+
+                BigDecimal v = baseCenter.add(dd.multiply(curve, MC), MC);
+                if (d >= c - 1) v = v.add(wingBoost, MC);
+                if (risk == RiskClass.CHAOTIC && rng.nextInt(7) == 0) v = v.add(bd("0.13"), MC);
+                if (risk == RiskClass.CONSERVATIVE && d >= c - 2) v = v.subtract(bd("0.09"), MC);
+
+                v = v.add(micro, MC);
+                v = clamp(v, bd("0.03"), bd("90.00"));
+                raw[i] = v;
+            }
+
+            // Symmetrize + jitter symmetrically.
+            for (int i = 0; i < c; i++) {
+                BigDecimal j = bd(rng.nextInt(49)).divide(bd("2000"), MC); // 0..0.0245
+                BigDecimal a = raw[i].add(j, MC);
+                BigDecimal b = raw[lanes - 1 - i].add(j, MC);
+                BigDecimal m = a.add(b, MC).divide(bd("2"), MC);
+                raw[i] = m;
+                raw[lanes - 1 - i] = m;
+            }
+
+            // Normalize to target average (rough house edge).
+            BigDecimal avg = bd("0");
+            for (BigDecimal v : raw) avg = avg.add(v, MC);
+            avg = avg.divide(bd(Integer.toString(lanes)), MC);
+
+            BigDecimal targetAvg = bd("1.0").subtract(HOUSE_EDGE, MC);
+            BigDecimal scale = safeDiv(targetAvg, avg);
+
+            BigDecimal[] scaled = new BigDecimal[lanes];
+            for (int i = 0; i < lanes; i++) {
+                BigDecimal v = raw[i].multiply(scale, MC);
+                v = clamp(v, bd("0.02"), MAX_PAYOUT_MULT);
+                scaled[i] = v;
+            }
+
+            // Spike lanes (symmetric) for flavor.
+            int spikeD = 1 + rng.nextInt(Math.max(2, c));
+            int left = c - spikeD;
+            int right = c + spikeD;
+            BigDecimal bump = pickSpikeBump(risk, rng);
+            if (left >= 0 && right < lanes) {
+                scaled[left] = clamp(scaled[left].add(bump, MC), bd("0.02"), MAX_PAYOUT_MULT);
+                scaled[right] = scaled[left];
+            }
+
+            // Light drift correction by center.
+            BigDecimal avg2 = bd("0");
+            for (BigDecimal v : scaled) avg2 = avg2.add(v, MC);
+            avg2 = avg2.divide(bd(Integer.toString(lanes)), MC);
+            BigDecimal drift = targetAvg.subtract(avg2, MC);
+            if (drift.abs().compareTo(bd("0.012")) > 0) scaled[c] = clamp(scaled[c].add(drift, MC), bd("0.02"), MAX_PAYOUT_MULT);
+
+            return new PayoutTable(scaled);
+        }
+
+        private static BigDecimal pickBaseCenter(RiskClass r, TraceRng rng) {
+            switch (r) {
+                case CONSERVATIVE: return bd("0.80").add(bd(rng.nextInt(71)).divide(bd("1000"), MC), MC);
+                case NORMAL: return bd("0.66").add(bd(rng.nextInt(91)).divide(bd("1000"), MC), MC);
+                case AGGRESSIVE: return bd("0.54").add(bd(rng.nextInt(101)).divide(bd("1000"), MC), MC);
+                case CHAOTIC: return bd("0.47").add(bd(rng.nextInt(141)).divide(bd("1000"), MC), MC);
