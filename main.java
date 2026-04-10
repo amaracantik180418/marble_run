@@ -168,3 +168,88 @@ public final class marble_run {
         private final List<Event> events = new ArrayList<>(8192);
         private byte[] digestState = new byte[32];
 
+        public Ledger() { Arrays.fill(digestState, (byte) 0); }
+
+        public void emit(EventType t, String actor, String detail) {
+            long id = eid.getAndIncrement();
+            Event e = new Event(id, Instant.now(), t, actor == null ? "?" : actor, detail == null ? "" : detail);
+            events.add(e);
+            digestState = sha256(concat(digestState, e.format().getBytes(StandardCharsets.UTF_8)));
+        }
+
+        public List<Event> tail(int n) {
+            if (n <= 0) return Collections.emptyList();
+            int start = Math.max(0, events.size() - n);
+            return new ArrayList<>(events.subList(start, events.size()));
+        }
+
+        public int size() { return events.size(); }
+
+        public String digest() { return hex(digestState); }
+    }
+
+    // Game types
+    public enum BetKind {
+        SINGLE_DROP,
+        MULTI_DROP,
+        LADDER,
+        PARLAY,
+        ORBIT,
+        SWARM,
+        CHROMA
+    }
+
+    public enum RiskClass {
+        CONSERVATIVE,
+        NORMAL,
+        AGGRESSIVE,
+        CHAOTIC
+    }
+
+    public static final class Player {
+        public final String id;
+        public final String name;
+        private BigDecimal balance;
+        private BigDecimal rebateCredits;
+        private long createdAtEpochSec;
+        private long lastSeenEpochSec;
+        private final Deque<String> notes = new ArrayDeque<>(16);
+
+        private Player(String id, String name, BigDecimal balance, long createdAtEpochSec) {
+            this.id = id;
+            this.name = name;
+            this.balance = balance;
+            this.rebateCredits = money("0.00");
+            this.createdAtEpochSec = createdAtEpochSec;
+            this.lastSeenEpochSec = createdAtEpochSec;
+        }
+
+        public BigDecimal balance() { return balance; }
+        public BigDecimal rebateCredits() { return rebateCredits; }
+
+        private void touch(long epochSec) { lastSeenEpochSec = epochSec; }
+        private void add(BigDecimal amount) { balance = balance.add(amount, MC); }
+        private void sub(BigDecimal amount) { balance = balance.subtract(amount, MC); }
+        private void addRebate(BigDecimal amount) { rebateCredits = rebateCredits.add(amount, MC); }
+        private void subRebate(BigDecimal amount) { rebateCredits = rebateCredits.subtract(amount, MC); }
+
+        private void note(String n) {
+            String v = sanitizeNote(n);
+            if (notes.size() == 16) notes.removeFirst();
+            notes.addLast(v);
+        }
+
+        public List<String> recentNotes() { return new ArrayList<>(notes); }
+
+        @Override public String toString() {
+            return "Player{id=" + id + ", name=" + name + ", balance=" + balance + ", rebate=" + rebateCredits + "}";
+        }
+    }
+
+    public static final class House {
+        private BigDecimal bankroll;
+        private BigDecimal treasury;
+        private BigDecimal jackpot;
+        private BigDecimal rebatePool;
+
+        private BigDecimal sessionProfit;
