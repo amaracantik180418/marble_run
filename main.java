@@ -763,3 +763,88 @@ public final class marble_run {
 
             if (player.balance().add(worst, MC).compareTo(MAX_PLAYER_BALANCE) > 0) {
                 return Decision.no("balance cap guardrail");
+            }
+
+            return Decision.ok();
+        }
+
+        @Override public String name() {
+            return label + "{frac=" + maxExposureFraction + ", maxPayout=" + maxSingleBetPayout + ", window=" + maxWindowPayout + "}";
+        }
+    }
+
+    // Engine
+    public static final class Engine {
+        private final House house;
+        private final Ledger ledger;
+        private final RiskPolicy policy;
+        private final MarbleSimulator sim = new MarbleSimulator();
+
+        private final Map<String, Player> players = new LinkedHashMap<>();
+        private final Map<String, Bet> openBets = new LinkedHashMap<>();
+        private final Map<String, Bet> settledBets = new LinkedHashMap<>();
+
+        private long sessionStartMs;
+        private long lastNowMs;
+        private int turns;
+        private final TraceRng globalRng;
+
+        public Engine(House house, Ledger ledger, RiskPolicy policy, TraceRng globalRng) {
+            this.house = Objects.requireNonNull(house, "house");
+            this.ledger = Objects.requireNonNull(ledger, "ledger");
+            this.policy = Objects.requireNonNull(policy, "policy");
+            this.globalRng = Objects.requireNonNull(globalRng, "globalRng");
+            this.sessionStartMs = nowMs();
+            this.lastNowMs = this.sessionStartMs;
+            this.turns = 0;
+            ledger.emit(EventType.NOTE, HOUSE_ID, "engine boot " + entropyTag());
+            ledger.emit(EventType.HOUSE_BANKROLL_CHANGED, HOUSE_ID, "bankroll=" + house.bankroll());
+        }
+
+        public String createPlayer(String name, BigDecimal initialDeposit) {
+            bumpTurn();
+            String nm = sanitizeName(name);
+            BigDecimal dep = money2(nz(initialDeposit));
+            if (players.size() >= MAX_PLAYERS) throw new MarbleFault(Code.PLAYER_LIMIT, "player cap reached");
+            requireRange(dep, MIN_DEPOSIT, MAX_DEPOSIT, Code.DEPOSIT_RANGE, "deposit out of range");
+            String pid = genPlayerId(nm);
+            if (players.containsKey(pid)) pid = pid + "-" + hexShort(globalRng.nextBytes(6));
+            Player p = new Player(pid, nm, money("0.00"), Instant.now().getEpochSecond());
+            players.put(pid, p);
+            p.add(dep);
+            p.touch(Instant.now().getEpochSecond());
+            ledger.emit(EventType.PLAYER_CREATED, pid, "name=" + nm);
+            ledger.emit(EventType.DEPOSITED, pid, "amount=" + dep);
+            return pid;
+        }
+
+        public void deposit(String playerId, BigDecimal amount) {
+            bumpTurn();
+            Player p = mustPlayer(playerId);
+            BigDecimal a = money2(nz(amount));
+            requireRange(a, MIN_DEPOSIT, MAX_DEPOSIT, Code.DEPOSIT_RANGE, "deposit out of range");
+            p.add(a);
+            p.touch(Instant.now().getEpochSecond());
+            ledger.emit(EventType.DEPOSITED, p.id, "amount=" + a);
+        }
+
+        public void withdraw(String playerId, BigDecimal amount) {
+            bumpTurn();
+            Player p = mustPlayer(playerId);
+            BigDecimal a = money2(nz(amount));
+            requireRange(a, money("0.01"), MAX_WITHDRAW, Code.WITHDRAW_RANGE, "withdraw out of range");
+            if (p.balance().compareTo(a) < 0) throw new MarbleFault(Code.INSUFFICIENT_BALANCE, "insufficient balance");
+            p.sub(a);
+            p.touch(Instant.now().getEpochSecond());
+            ledger.emit(EventType.WITHDREW, p.id, "amount=" + a);
+        }
+
+        public void addNote(String playerId, String note) {
+            bumpTurn();
+            Player p = mustPlayer(playerId);
+            p.note(note);
+            ledger.emit(EventType.NOTE, p.id, "note=" + sanitizeNote(note));
+        }
+
+        public Bet placeBet(String playerId, ProposedBet pb) {
+            bumpTurn();
