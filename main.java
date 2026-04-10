@@ -83,3 +83,88 @@ public final class marble_run {
 
     // Guardrails.
     private static final BigDecimal MAX_PAYOUT_MULT = bd("55.0");
+    private static final BigDecimal MAX_PER_BET_PAYOUT = money("175000.00");
+    private static final BigDecimal MAX_PLAYER_BALANCE = money("500000.00");
+
+    private static final long MAX_CLOCK_SKEW_MS = 15_000L;
+    private static final long SOFT_IDLE_MS = 9L * 60_000L;
+
+    private static final int TRACE_BYTES = 32;
+    private static final int COMMIT_BYTES = 32;
+
+    // Faults
+    public static final class MarbleFault extends RuntimeException {
+        public final Code code;
+        public MarbleFault(Code code, String message) { super(message); this.code = code; }
+        public MarbleFault(Code code, String message, Throwable cause) { super(message, cause); this.code = code; }
+        @Override public String toString() { return "MarbleFault{" + code + ", " + getMessage() + "}"; }
+    }
+
+    public enum Code {
+        INPUT_EMPTY,
+        INPUT_TOO_LONG,
+        INPUT_BAD_FORMAT,
+        PLAYER_LIMIT,
+        BET_LIMIT,
+        BET_AMOUNT_RANGE,
+        DEPOSIT_RANGE,
+        WITHDRAW_RANGE,
+        INSUFFICIENT_BALANCE,
+        HOUSE_SOLVENCY,
+        ENGINE_INVARIANT,
+        TRACE_ERROR,
+        RISK_REJECTED,
+        CLOCK_SKEW,
+        RATE_LIMIT,
+        IO_ERROR,
+        UNKNOWN
+    }
+
+    // Events
+    public enum EventType {
+        PLAYER_CREATED,
+        DEPOSITED,
+        WITHDREW,
+        NOTE,
+        BET_PLACED,
+        BET_SETTLED,
+        MARBLE_DROPPED,
+        TABLE_BUILT,
+        TREASURY_ACCRUED,
+        JACKPOT_ACCRUED,
+        REBATE_ACCRUED,
+        REBATE_CLAIMED,
+        HOUSE_EDGE_TAKEN,
+        HOUSE_BANKROLL_CHANGED,
+        HOUSE_WINDOW_PAYOUT,
+    }
+
+    public static final class Event {
+        public final long id;
+        public final Instant at;
+        public final EventType type;
+        public final String actor;
+        public final String detail;
+        public Event(long id, Instant at, EventType type, String actor, String detail) {
+            this.id = id;
+            this.at = at;
+            this.type = type;
+            this.actor = actor;
+            this.detail = detail;
+        }
+        public String format() {
+            return new StringBuilder()
+                .append('#').append(id).append(' ')
+                .append(TS.format(at))
+                .append(" [").append(type).append("] ")
+                .append(actor).append(" :: ")
+                .append(detail)
+                .toString();
+        }
+    }
+
+    public static final class Ledger {
+        private final AtomicLong eid = new AtomicLong(1);
+        private final List<Event> events = new ArrayList<>(8192);
+        private byte[] digestState = new byte[32];
+
