@@ -508,3 +508,88 @@ public final class marble_run {
     public static final class MarbleSimulator {
         public DropResult drop(Board b, TraceRng rng, RiskClass risk) {
             int lane = b.centerLane();
+            int[] path = new int[b.depth];
+            byte[] frag = rng.nextBytes(Math.max(13, Math.min(51, b.depth + 11)));
+
+            int bias = biasFromRisk(risk);
+            int wobble = wobbleFromRisk(risk);
+            for (int row = 0; row < b.depth; row++) {
+                int step = stepDecision(rng, bias, wobble, row, frag);
+                lane = b.clampLane(lane + step);
+                path[row] = lane;
+            }
+            return new DropResult(lane, path, frag);
+        }
+
+        private int biasFromRisk(RiskClass r) {
+            switch (r) {
+                case CONSERVATIVE: return -1;
+                case NORMAL: return 0;
+                case AGGRESSIVE: return 1;
+                case CHAOTIC: return 0;
+                default: return 0;
+            }
+        }
+
+        private int wobbleFromRisk(RiskClass r) {
+            switch (r) {
+                case CONSERVATIVE: return 1;
+                case NORMAL: return 2;
+                case AGGRESSIVE: return 3;
+                case CHAOTIC: return 4;
+                default: return 2;
+            }
+        }
+
+        private int stepDecision(TraceRng rng, int bias, int wobble, int row, byte[] frag) {
+            int coin = rng.nextInt(2); // -1 or +1 base
+            int v = coin == 0 ? -1 : 1;
+
+            int chaos = ((frag[row % frag.length] & 0xff) ^ (row * 33 + 7)) & 0x7;
+            int tilt = bias;
+            if (chaos == 0 && rng.nextInt(9) == 0) tilt *= -1;
+            if (chaos == 7 && rng.nextInt(11) == 0) tilt *= 2;
+
+            if (tilt == 0) {
+                if (wobble >= 4 && rng.nextInt(13) == 0) return v * 2;
+                return v;
+            }
+
+            int pick = rng.nextInt(13 + wobble * 2 + Math.abs(tilt) * 3);
+            if (pick < 2 + wobble) return tilt < 0 ? -1 : 1;
+            if (wobble >= 3 && pick == 7) return v * 2;
+            return v;
+        }
+    }
+
+    // Payout tables
+    public static final class PayoutTable {
+        private final BigDecimal[] mult;
+        private final int lanes;
+        private final String digest;
+
+        private PayoutTable(BigDecimal[] mult) {
+            this.mult = mult;
+            this.lanes = mult.length;
+            this.digest = digestOf(mult);
+        }
+
+        public BigDecimal multiplierForLane(int lane) {
+            if (lane < 0 || lane >= lanes) throw new MarbleFault(Code.ENGINE_INVARIANT, "lane out of table");
+            return mult[lane];
+        }
+
+        public int lanes() { return lanes; }
+        public String digest() { return digest; }
+
+        public String pretty() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("digest=").append(digest).append('\n');
+            for (int i = 0; i < lanes; i++) {
+                sb.append(i).append(':').append(mult[i].setScale(4, RM).toPlainString());
+                if (i + 1 < lanes) sb.append(' ');
+            }
+            return sb.toString();
+        }
+
+        private static String digestOf(BigDecimal[] mult) {
