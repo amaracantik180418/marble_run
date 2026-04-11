@@ -1443,3 +1443,88 @@ public final class marble_run {
             StringBuilder cur = new StringBuilder();
             boolean q = false;
             for (int i = 0; i < s.length(); i++) {
+                char c = s.charAt(i);
+                if (c == '"') { q = !q; continue; }
+                if (!q && Character.isWhitespace(c)) {
+                    if (cur.length() > 0) { out.add(cur.toString()); cur.setLength(0); }
+                    continue;
+                }
+                cur.append(c);
+            }
+            if (cur.length() > 0) out.add(cur.toString());
+            if (out.isEmpty()) throw new MarbleFault(Code.INPUT_EMPTY, "empty input");
+            return out.toArray(new String[0]);
+        }
+
+        private String joinFrom(String[] parts, int idx) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = idx; i < parts.length; i++) {
+                if (i > idx) sb.append(' ');
+                sb.append(parts[i]);
+            }
+            return sb.toString();
+        }
+
+        private <E extends Enum<E>> E parseEnum(Class<E> clz, String raw) {
+            if (raw == null) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "enum missing");
+            try {
+                return Enum.valueOf(clz, raw.trim().toUpperCase(Locale.ROOT));
+            } catch (Exception e) {
+                throw new MarbleFault(Code.INPUT_BAD_FORMAT, "bad enum: " + raw);
+            }
+        }
+
+        private int parseInt(String s, int lo, int hi) {
+            try {
+                int v = Integer.parseInt(s);
+                if (v < lo || v > hi) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "int out of range");
+                return v;
+            } catch (NumberFormatException nfe) {
+                throw new MarbleFault(Code.INPUT_BAD_FORMAT, "bad int: " + s);
+            }
+        }
+
+        private BigDecimal parseMoney(String s) {
+            if (s == null || s.trim().isEmpty()) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "money missing");
+            try {
+                BigDecimal v = new BigDecimal(s.trim(), MC).setScale(2, RM);
+                if (v.compareTo(money("0.00")) < 0) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "money negative");
+                return v;
+            } catch (Exception e) {
+                throw new MarbleFault(Code.INPUT_BAD_FORMAT, "bad money: " + s);
+            }
+        }
+
+        private void println(String s) throws IOException { out.write(s); out.write("\n"); out.flush(); }
+        private void print(String s) throws IOException { out.write(s); out.flush(); }
+    }
+
+    // Bootstrap / presets
+    public static final class HouseBootstrap {
+        public static House defaultHouse() {
+            SecureRandom sr = new SecureRandom();
+            int base = 145_000 + sr.nextInt(205_001); // 145k..350k
+            int cents = sr.nextInt(100);
+            BigDecimal br = new BigDecimal(base + "." + (cents < 10 ? "0" + cents : Integer.toString(cents)), MC)
+                .setScale(4, RM);
+            return new House(br);
+        }
+
+        public static RiskPolicy defaultPolicy() {
+            SecureRandom sr = new SecureRandom();
+            BigDecimal frac = new BigDecimal("0." + (22 + sr.nextInt(33))); // 0.22..0.54
+            BigDecimal maxP = new BigDecimal(60_000 + sr.nextInt(160_001)).setScale(4, RM);
+            BigDecimal window = new BigDecimal(180_000 + sr.nextInt(520_001)).setScale(4, RM);
+            int chaosGate = 250_00 + sr.nextInt(1_250_00); // cents: 250.00..1500.00
+            return new GuardrailRiskPolicy(frac, maxP, window, chaosGate,
+                "SatinGuardrails@" + hexShort(sha256(UUID.randomUUID().toString().getBytes(StandardCharsets.UTF_8))));
+        }
+
+        public static TraceRng defaultGlobalRng() {
+            byte[] seed = sha256((entropyTag() + ":" + hexFrosted(18) + ":" + SALT_D + ":" + entropyTag()).getBytes(StandardCharsets.UTF_8));
+            byte[] pers = sha256((DEVNULL_ID + ":" + ORACLE_ID + ":" + TREASURY_ID + ":" + ROUTER_ID).getBytes(StandardCharsets.UTF_8));
+            if ((seed[0] & 1) == 0) return new SecureTraceRng(seed, pers, "GlobalSecure");
+            long s64 = fold64(seed) ^ fold64(pers);
+            return new SplitMix64TraceRng(s64, pers, "GlobalSplitMix");
+        }
+
