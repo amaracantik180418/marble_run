@@ -1188,3 +1188,88 @@ public final class marble_run {
                 case 4: return "marble mind: " + a + " " + c + ", " + rk + " stake " + s;
                 case 5: return "glint report: " + b + " " + c + " / " + a;
                 default: return "chute memo: " + a + " " + b + " " + c;
+            }
+        }
+        private String pick(String[] arr) { return arr[r.nextInt(arr.length)]; }
+        private String[] adjs() {
+            return new String[] { "chromatic", "velvet", "prismatic", "arc-laced", "hushed", "flickerwise", "neon-sober", "emberclean", "rippled", "quartz-bright", "lattice-soft", "starlit", "halo-cut", "glacier-fine", "ink-smooth", "gilded", "spectral", "oxide-calm", "gravity-sweet", "plasma-quiet", "cerulean", "opaline" };
+        }
+        private String[] nouns() {
+            return new String[] { "rail", "pegfield", "chute", "basin", "gate", "wicket", "ladder", "rivet", "crown", "hinge", "spiral", "circuit", "lantern", "sigil", "tramline", "cinder", "mirror", "keystone", "lattice", "hollow", "runnel", "orbit" };
+        }
+        private String[] verbs() {
+            return new String[] { "sings", "tilts", "threads", "taps", "cradles", "shivers", "balances", "skips", "folds", "unfurls", "locks", "drifts", "sparks", "clicks", "glides", "echoes", "braids", "hums", "flares" };
+        }
+    }
+
+    // CLI
+    public static final class Cli {
+        private final Engine engine;
+        private final Announcer announcer;
+        private final BufferedReader in;
+        private final BufferedWriter out;
+        private volatile boolean running = true;
+        private long lastActivityMs = nowMs();
+
+        public Cli(Engine engine, Announcer announcer) {
+            this.engine = engine;
+            this.announcer = announcer;
+            this.in = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
+            this.out = new BufferedWriter(new OutputStreamWriter(System.out, StandardCharsets.UTF_8));
+        }
+
+        public void run() throws IOException {
+            println(banner());
+            help();
+            while (running) {
+                if (nowMs() - lastActivityMs > SOFT_IDLE_MS) {
+                    println("(idle hint: type `help` or `quit`)");
+                    lastActivityMs = nowMs();
+                }
+                print("> ");
+                String line = in.readLine();
+                if (line == null) break;
+                lastActivityMs = nowMs();
+                line = line.trim();
+                if (line.isEmpty()) continue;
+                try {
+                    dispatch(line);
+                } catch (MarbleFault mf) {
+                    println("! " + mf.code + " :: " + mf.getMessage());
+                } catch (Exception e) {
+                    println("! " + Code.UNKNOWN + " :: " + e.getClass().getSimpleName() + " " + e.getMessage());
+                }
+            }
+            println("bye.");
+            out.flush();
+        }
+
+        private void dispatch(String line) throws IOException {
+            String[] parts = splitArgs(line);
+            String cmd = parts[0].toLowerCase(Locale.ROOT);
+
+            switch (cmd) {
+                case "help":
+                case "?":
+                    help();
+                    return;
+                case "quit":
+                case "exit":
+                    running = false;
+                    return;
+                case "house":
+                    showHouse();
+                    return;
+                case "policy":
+                    println(engine.policyName());
+                    return;
+                case "tail": {
+                    int n = parts.length >= 2 ? parseInt(parts[1], 1, 500) : 25;
+                    tail(n);
+                    return;
+                }
+                case "digest":
+                    println("sessionDigest=" + engine.sessionDigest());
+                    return;
+                case "new": {
+                    if (parts.length < 3) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "usage: new <name> <deposit>");
