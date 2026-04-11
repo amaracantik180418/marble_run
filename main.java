@@ -1358,3 +1358,88 @@ public final class marble_run {
             Player p = engine.getPlayer(id);
             println("player.id=" + p.id);
             println("player.name=" + p.name);
+            println("player.balance=" + p.balance());
+            List<String> notes = p.recentNotes();
+            if (!notes.isEmpty()) {
+                println("notes:");
+                for (String n : notes) println("- " + n);
+            }
+        }
+
+        private void showOpen() {
+            List<Bet> bets = engine.openBets();
+            if (bets.isEmpty()) { println("(no open bets)"); return; }
+            for (Bet b : bets) {
+                println(b.betId + " :: " + b.playerId + " stake=" + b.stake + " kind=" + b.kind + " risk=" + b.riskClass + " commit=" + b.commit.substring(0, 18) + "..");
+            }
+        }
+
+        private void showBet(Bet b) {
+            println("bet.id=" + b.betId);
+            println("bet.player=" + b.playerId);
+            println("bet.kind=" + b.kind);
+            println("bet.risk=" + b.riskClass);
+            println("bet.board=" + b.lanes + "x" + b.depth + " marbles=" + b.marbles);
+            println("bet.stake=" + b.stake);
+            println("bet.commit=" + b.commit);
+            println("bet.memo=" + b.memo);
+            println("bet.settled=" + b.settled + " cancelled=" + b.cancelled);
+            if (b.settled) {
+                println("bet.settledAt=" + b.settledAt);
+                println("bet.payout=" + b.payout);
+                println("bet.treasuryFee=" + b.treasuryFee);
+                println("bet.jackpotFee=" + b.jackpotFee);
+                println("bet.nominalEdge=" + b.houseEdgeTaken);
+                println("bet.resultLane=" + b.resultLane);
+                println("bet.traceHash=" + b.traceHash);
+                println("bet.tableDigest=" + b.tableDigest);
+            }
+        }
+
+        private void tail(int n) {
+            List<Event> es = engine.tailEvents(n);
+            if (es.isEmpty()) { println("(no events)"); return; }
+            for (Event e : es) println(e.format());
+        }
+
+        private void help() {
+            println(
+                "commands:\n" +
+                "  help | ?                              show help\n" +
+                "  house                                show house balances\n" +
+                "  policy                               show risk policy\n" +
+                "  digest                               show session digest\n" +
+                "  tail [n]                             show last n events (default 25)\n" +
+                "  new <name> <deposit>                 create player\n" +
+                "  me <playerId>                        show player\n" +
+                "  deposit <playerId> <amount>          add funds\n" +
+                "  withdraw <playerId> <amount>         withdraw funds\n" +
+                "  note <playerId> <text...>            attach a short note\n" +
+                "  bet <playerId> <stake> <kind> <risk> <lanes> <depth> <marbles> [memo...]\n" +
+                "  open                                 list open bets\n" +
+                "  settle <betId>                       settle a bet\n" +
+                "  quit | exit                          quit\n" +
+                "examples:\n" +
+                "  new Ada 125.50\n" +
+                "  bet p_xxx 2.00 SINGLE_DROP NORMAL 13 19 1 sparkle-rail\n" +
+                "  settle b_xxx"
+            );
+        }
+
+        private String banner() {
+            StringJoiner sj = new StringJoiner("\n");
+            sj.add("marble_run :: AI marble betting arcade");
+            sj.add("houseId=" + HOUSE_ID);
+            sj.add("treasuryId=" + TREASURY_ID);
+            sj.add("oracleId=" + ORACLE_ID);
+            sj.add("auditorId=" + AUDITOR_ID);
+            sj.add("routerId=" + ROUTER_ID);
+            sj.add("bootEntropy=" + entropyTag());
+            return sj.toString();
+        }
+
+        private String[] splitArgs(String s) {
+            List<String> out = new ArrayList<>();
+            StringBuilder cur = new StringBuilder();
+            boolean q = false;
+            for (int i = 0; i < s.length(); i++) {
