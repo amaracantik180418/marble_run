@@ -1103,3 +1103,88 @@ public final class marble_run {
                 int laneLast = drops.get(drops.size() - 1).finalLane;
                 pattern = (Math.abs(lane0 - laneLast) >= 3) && (rng.nextInt(9) == 0);
             }
+            if (pattern && roll < 2) return true;
+            return roll == 0;
+        }
+
+        private byte[] deriveTraceBytes(byte[] reveal, List<DropResult> drops, String payoutTableDigest, Board board, BetKind kind, RiskClass risk) {
+            try {
+                MessageDigest md = MessageDigest.getInstance("SHA-256");
+                md.update(reveal);
+                md.update((SALT_E + ":" + payoutTableDigest).getBytes(StandardCharsets.UTF_8));
+                md.update((board.lanes + "x" + board.depth + ":" + kind + ":" + risk).getBytes(StandardCharsets.UTF_8));
+                for (DropResult d : drops) {
+                    md.update((byte) d.finalLane);
+                    md.update(d.traceFragment);
+                }
+                byte[] out = md.digest();
+                if (out.length != COMMIT_BYTES) throw new MarbleFault(Code.TRACE_ERROR, "unexpected digest size");
+                return out;
+            } catch (Exception e) {
+                throw new MarbleFault(Code.TRACE_ERROR, "trace derivation failed", e);
+            }
+        }
+
+        private String summarizeLane(List<DropResult> drops, Board board) {
+            if (drops.isEmpty()) return "n/a";
+            List<Integer> lanes = new ArrayList<>();
+            for (DropResult d : drops) lanes.add(d.finalLane);
+            lanes.sort(Comparator.naturalOrder());
+            int mid = lanes.get(lanes.size() / 2);
+            int offset = mid - board.centerLane();
+            return mid + (offset == 0 ? "(center)" : (offset > 0 ? "(R" + offset + ")" : "(L" + (-offset) + ")"));
+        }
+
+        private Player mustPlayer(String id) {
+            if (id == null || id.isEmpty()) throw new MarbleFault(Code.INPUT_EMPTY, "player id empty");
+            Player p = players.get(id);
+            if (p == null) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "player not found");
+            return p;
+        }
+
+        private Bet mustOpenBet(String betId) {
+            if (betId == null || betId.isEmpty()) throw new MarbleFault(Code.INPUT_EMPTY, "bet id empty");
+            Bet b = openBets.get(betId);
+            if (b == null) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "bet not found or not open");
+            return b;
+        }
+
+        private void bumpTurn() {
+            long n = nowMs();
+            if (n + MAX_CLOCK_SKEW_MS < lastNowMs) throw new MarbleFault(Code.CLOCK_SKEW, "clock skew detected");
+            lastNowMs = n;
+            turns++;
+            if (turns > MAX_TURNS_PER_SESSION) throw new MarbleFault(Code.RATE_LIMIT, "session turn limit reached");
+            if (n - sessionStartMs > SOFT_IDLE_MS * 4) throw new MarbleFault(Code.RATE_LIMIT, "session timebox reached");
+        }
+
+        private String genPlayerId(String nm) {
+            byte[] seed = sha256((nm + ":" + Instant.now().toEpochMilli() + ":" + entropyTag() + ":" + SALT_A).getBytes(StandardCharsets.UTF_8));
+            return "p_" + hexShort(seed);
+        }
+
+        private String genBetId(String pid, ProposedBet pb, String commitHex) {
+            byte[] seed = sha256((pid + ":" + pb.kind + ":" + pb.risk + ":" + pb.lanes + ":" + pb.depth + ":" + pb.marbles + ":" + commitHex + ":" + entropyTag()).getBytes(StandardCharsets.UTF_8));
+            return "b_" + hexShort(seed) + "_" + Integer.toString(100 + globalRng.nextInt(899));
+        }
+    }
+
+    // Announcer flavor
+    public static final class Announcer {
+        private final Random r;
+        public Announcer(long seed) { this.r = new Random(seed ^ 0x51D2E3A4B5C6D7E8L); }
+        public String lineFor(BetKind kind, RiskClass risk, BigDecimal stake) {
+            String a = pick(adjs());
+            String b = pick(nouns());
+            String c = pick(verbs());
+            String k = kind.name().toLowerCase(Locale.ROOT).replace('_', '-');
+            String rk = risk.name().toLowerCase(Locale.ROOT);
+            String s = money2(stake).setScale(2, RM).toPlainString();
+            switch (r.nextInt(7)) {
+                case 0: return a + " " + b + " " + c + " (" + k + ", " + rk + ", stake " + s + ")";
+                case 1: return "rail whisper: " + b + " " + c + " — " + rk + " mode";
+                case 2: return "peg hymn: " + a + " drift, " + k + " wager " + s;
+                case 3: return "gravity oracle: " + c + " the " + b + " (" + k + ")";
+                case 4: return "marble mind: " + a + " " + c + ", " + rk + " stake " + s;
+                case 5: return "glint report: " + b + " " + c + " / " + a;
+                default: return "chute memo: " + a + " " + b + " " + c;
