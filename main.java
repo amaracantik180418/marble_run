@@ -1273,3 +1273,88 @@ public final class marble_run {
                     return;
                 case "new": {
                     if (parts.length < 3) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "usage: new <name> <deposit>");
+                    String pid = engine.createPlayer(parts[1], parseMoney(parts[2]));
+                    println("playerId=" + pid);
+                    println(announcer.lineFor(BetKind.SINGLE_DROP, RiskClass.NORMAL, parseMoney(parts[2])));
+                    return;
+                }
+                case "me":
+                    if (parts.length < 2) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "usage: me <playerId>");
+                    showPlayer(parts[1]);
+                    return;
+                case "deposit":
+                    if (parts.length < 3) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "usage: deposit <playerId> <amount>");
+                    engine.deposit(parts[1], parseMoney(parts[2]));
+                    println("ok");
+                    return;
+                case "withdraw":
+                    if (parts.length < 3) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "usage: withdraw <playerId> <amount>");
+                    engine.withdraw(parts[1], parseMoney(parts[2]));
+                    println("ok");
+                    return;
+                case "note":
+                    if (parts.length < 3) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "usage: note <playerId> <text...>");
+                    engine.addNote(parts[1], joinFrom(parts, 2));
+                    println("ok");
+                    return;
+                case "open":
+                    showOpen();
+                    return;
+                case "bet":
+                    bet(parts);
+                    return;
+                case "settle":
+                    if (parts.length < 2) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "usage: settle <betId>");
+                    Bet b = engine.settle(parts[1]);
+                    showBet(b);
+                    println(announcer.lineFor(b.kind, b.riskClass, b.stake));
+                    return;
+                default:
+                    throw new MarbleFault(Code.INPUT_BAD_FORMAT, "unknown command: " + cmd);
+            }
+        }
+
+        private void bet(String[] parts) {
+            if (parts.length < 8) {
+                throw new MarbleFault(Code.INPUT_BAD_FORMAT,
+                    "usage: bet <playerId> <stake> <kind:SINGLE_DROP|MULTI_DROP|LADDER|PARLAY|ORBIT|SWARM|CHROMA> <risk:CONSERVATIVE|NORMAL|AGGRESSIVE|CHAOTIC> <lanes> <depth> <marbles> [memo...]");
+            }
+            String pid = parts[1];
+            BigDecimal stake = parseMoney(parts[2]);
+            BetKind kind = parseEnum(BetKind.class, parts[3]);
+            RiskClass risk = parseEnum(RiskClass.class, parts[4]);
+            int lanes = parseInt(parts[5], 3, 31);
+            int depth = parseInt(parts[6], 6, 64);
+            int marbles = parseInt(parts[7], 1, 25);
+            String memo = parts.length > 8 ? joinFrom(parts, 8) : "";
+
+            Map<String, String> tags = new HashMap<>();
+            tags.put("client", "cli");
+            tags.put("build", "marble_run/" + entropyTag().substring(0, 8));
+            tags.put("router", ROUTER_ID.substring(0, 10) + "..");
+            tags.put("nonce", UUID.randomUUID().toString().substring(0, 8));
+            tags.put("sig", sig18(pid, stake, kind, risk, lanes, depth, marbles));
+
+            ProposedBet pb = new ProposedBet(kind, lanes, depth, marbles, risk, stake, memo, tags);
+            Bet b = engine.placeBet(pid, pb);
+            println("betId=" + b.betId);
+            println("commit=" + b.commit);
+            println("reveal(b64)=" + b.reveal);
+            println("tip: run `settle " + b.betId + "` to resolve");
+        }
+
+        private void showHouse() {
+            House h = engine.getHouse();
+            println("house.bankroll=" + h.bankroll());
+            println("house.treasury=" + h.treasury());
+            println("house.jackpot=" + h.jackpot());
+            println("house.sessionProfit=" + h.sessionProfit());
+            println("house.grossStakes=" + h.grossStakes());
+            println("house.grossPayouts=" + h.grossPayouts());
+            println("house.payoutWindowSum=" + h.payoutWindowSum());
+        }
+
+        private void showPlayer(String id) {
+            Player p = engine.getPlayer(id);
+            println("player.id=" + p.id);
+            println("player.name=" + p.name);
