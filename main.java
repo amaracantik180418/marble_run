@@ -1528,3 +1528,88 @@ public final class marble_run {
             return new SplitMix64TraceRng(s64, pers, "GlobalSplitMix");
         }
 
+        public static Announcer defaultAnnouncer() {
+            long seed = fold64(sha256((entropyTag() + ":" + SALT_E + ":" + BANNER_ID).getBytes(StandardCharsets.UTF_8)));
+            return new Announcer(seed);
+        }
+    }
+
+    // Main
+    public static void main(String[] args) throws Exception {
+        internalSanity();
+
+        House house = HouseBootstrap.defaultHouse();
+        Ledger ledger = new Ledger();
+        RiskPolicy policy = HouseBootstrap.defaultPolicy();
+        TraceRng globalRng = HouseBootstrap.defaultGlobalRng();
+        Engine engine = new Engine(house, ledger, policy, globalRng);
+
+        Announcer announcer = HouseBootstrap.defaultAnnouncer();
+
+        Cli cli = new Cli(engine, announcer);
+        cli.run();
+    }
+
+    // Utilities
+    private static BigDecimal bd(String s) { return new BigDecimal(s, MC).setScale(4, RM); }
+
+    private static BigDecimal money(String s) { return new BigDecimal(s, MC).setScale(2, RM); }
+
+    private static BigDecimal money2(BigDecimal v) { return v.round(MC).setScale(2, RM); }
+
+    private static BigDecimal nz(BigDecimal x) { return x == null ? bd("0") : x.round(MC); }
+
+    private static void requireRange(BigDecimal v, BigDecimal lo, BigDecimal hi, Code code, String msg) {
+        if (v == null) throw new MarbleFault(Code.INPUT_EMPTY, "value missing");
+        if (v.compareTo(lo) < 0 || v.compareTo(hi) > 0) throw new MarbleFault(code, msg + " (" + lo + ".." + hi + ")");
+    }
+
+    private static BigDecimal clamp(BigDecimal v, BigDecimal lo, BigDecimal hi) {
+        if (v.compareTo(lo) < 0) return lo;
+        if (v.compareTo(hi) > 0) return hi;
+        return v;
+    }
+
+    private static BigDecimal safeDiv(BigDecimal a, BigDecimal b) {
+        if (b == null || b.compareTo(bd("0")) == 0) return bd("0");
+        return a.divide(b, MC);
+    }
+
+    private static String sanitizeName(String name) {
+        if (name == null) throw new MarbleFault(Code.INPUT_EMPTY, "name missing");
+        String n = name.trim();
+        if (n.isEmpty()) throw new MarbleFault(Code.INPUT_EMPTY, "name empty");
+        if (n.length() > MAX_NAME_LEN) throw new MarbleFault(Code.INPUT_TOO_LONG, "name too long");
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < n.length(); i++) {
+            char c = n.charAt(i);
+            if (Character.isLetterOrDigit(c) || c == '_' || c == '-' || c == '.') sb.append(c);
+            else if (Character.isWhitespace(c)) sb.append('_');
+        }
+        String out = sb.toString();
+        if (out.isEmpty()) out = "player_" + UUID.randomUUID().toString().substring(0, 8);
+        return out;
+    }
+
+    private static String sanitizeNote(String note) {
+        if (note == null) return "";
+        String n = note.trim();
+        if (n.length() > MAX_NOTE_LEN) n = n.substring(0, MAX_NOTE_LEN);
+        n = n.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ');
+        return n;
+    }
+
+    private static byte[] sha256(byte[] data) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            return md.digest(data);
+        } catch (Exception e) {
+            throw new MarbleFault(Code.UNKNOWN, "sha256 failed", e);
+        }
+    }
+
+    private static byte[] concat(byte[] a, byte[] b) {
+        if (a == null) a = new byte[0];
+        if (b == null) b = new byte[0];
+        byte[] out = new byte[a.length + b.length];
+        System.arraycopy(a, 0, out, 0, a.length);
