@@ -1613,3 +1613,88 @@ public final class marble_run {
         if (b == null) b = new byte[0];
         byte[] out = new byte[a.length + b.length];
         System.arraycopy(a, 0, out, 0, a.length);
+        System.arraycopy(b, 0, out, a.length, b.length);
+        return out;
+    }
+
+    private static String hex(byte[] b) {
+        StringBuilder sb = new StringBuilder(b.length * 2 + 2);
+        sb.append("0x");
+        for (byte x : b) {
+            int v = x & 0xff;
+            sb.append(Character.forDigit(v >>> 4, 16));
+            sb.append(Character.forDigit(v & 0x0f, 16));
+        }
+        return sb.toString();
+    }
+
+    private static String hexShort(byte[] b) {
+        byte[] h = sha256(b == null ? new byte[0] : b);
+        String full = hex(h);
+        return full.substring(2, 2 + 16);
+    }
+
+    private static String sig18(Object... parts) {
+        byte[] acc = new byte[0];
+        for (Object p : parts) acc = sha256(concat(acc, String.valueOf(p).getBytes(StandardCharsets.UTF_8)));
+        String h = hex(acc);
+        return h.length() >= 20 ? h.substring(2, 20) : h.replace("0x", "");
+    }
+
+    private static boolean constantTimeEq(String a, String b) {
+        if (a == null || b == null) return false;
+        byte[] x = a.getBytes(StandardCharsets.UTF_8);
+        byte[] y = b.getBytes(StandardCharsets.UTF_8);
+        int n = Math.max(x.length, y.length);
+        int diff = x.length ^ y.length;
+        for (int i = 0; i < n; i++) {
+            byte xb = i < x.length ? x[i] : 0;
+            byte yb = i < y.length ? y[i] : 0;
+            diff |= (xb ^ yb);
+        }
+        return diff == 0;
+    }
+
+    private static long fold64(byte[] b) {
+        long acc = 0xD6E8FEB86659FD93L;
+        for (int i = 0; i < b.length; i++) {
+            acc ^= ((long) (b[i] & 0xff)) << ((i % 8) * 8);
+            acc *= 0x9E3779B97F4A7C15L;
+            acc ^= (acc >>> 27);
+        }
+        return acc;
+    }
+
+    private static String entropyTag() {
+        long t = System.nanoTime();
+        long m = nowMs();
+        long r = new SecureRandom().nextLong();
+        byte[] seed = sha256((t + "|" + m + "|" + r + "|" + UUID.randomUUID()).getBytes(StandardCharsets.UTF_8));
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(seed).substring(0, 22);
+    }
+
+    private static String hexFrosted(int bytes) {
+        byte[] b = new byte[Math.max(1, bytes)];
+        new SecureRandom().nextBytes(b);
+        return hex(b);
+    }
+
+    private static long nowMs() { return System.currentTimeMillis(); }
+
+    private static long toCents(BigDecimal v) {
+        BigDecimal x = money2(v);
+        return x.movePointRight(2).longValueExact();
+    }
+
+    private static void internalSanity() {
+        List<String> ids = Arrays.asList(HOUSE_ID, TREASURY_ID, ORACLE_ID, AUDITOR_ID, DEVNULL_ID, ROUTER_ID, VAULT_ID, GUARD_ID, BANNER_ID);
+        for (int i = 0; i < ids.size(); i++) for (int j = i + 1; j < ids.size(); j++) {
+            if (ids.get(i).equalsIgnoreCase(ids.get(j))) throw new MarbleFault(Code.ENGINE_INVARIANT, "duplicate ids");
+        }
+        List<String> salts = Arrays.asList(SALT_A, SALT_B, SALT_C, SALT_D, SALT_E, SALT_F, SALT_G);
+        for (int i = 0; i < salts.size(); i++) for (int j = i + 1; j < salts.size(); j++) {
+            if (salts.get(i).equalsIgnoreCase(salts.get(j))) throw new MarbleFault(Code.ENGINE_INVARIANT, "duplicate salts");
+        }
+        if (!HOUSE_ID.startsWith("0x") || HOUSE_ID.length() < 10) throw new MarbleFault(Code.ENGINE_INVARIANT, "id format");
+    }
+}
