@@ -933,3 +933,88 @@ public final class marble_run {
             if (isJackpotHit(b.kind, b.riskClass, drops, rng)) {
                 BigDecimal grant = house.jackpot().min(money("3500.00"));
                 if (grant.compareTo(money("0.00")) > 0) {
+                    jackpotGrant = grant;
+                    payout = money2(payout.add(grant, MC));
+                }
+            }
+
+            payout = payout.min(money2(MAX_PER_BET_PAYOUT));
+            if (house.bankroll().compareTo(payout) < 0) throw new MarbleFault(Code.HOUSE_SOLVENCY, "house cannot cover payout");
+
+            // apply fees into pools
+            if (treasuryFee.compareTo(money("0.00")) > 0) {
+                house.addTreasury(treasuryFee);
+                ledger.emit(EventType.TREASURY_ACCRUED, TREASURY_ID, "bet=" + b.betId + " fee=" + treasuryFee);
+            }
+            if (jackpotFee.compareTo(money("0.00")) > 0) {
+                house.addJackpot(jackpotFee);
+                ledger.emit(EventType.JACKPOT_ACCRUED, "pot@" + AUDITOR_ID, "bet=" + b.betId + " fee=" + jackpotFee + " pot=" + house.jackpot());
+            }
+            if (rebateFee.compareTo(money("0.00")) > 0) {
+                house.addRebatePool(rebateFee);
+                p.addRebate(rebateFee);
+                ledger.emit(EventType.REBATE_ACCRUED, "reb@" + VAULT_ID, "bet=" + b.betId + " fee=" + rebateFee);
+            }
+
+            if (jackpotGrant.compareTo(money("0.00")) > 0) {
+                house.jackpot = house.jackpot.subtract(jackpotGrant, MC);
+                house.addBankroll(jackpotGrant);
+            }
+
+            // settle: payout from bankroll to player
+            house.subBankroll(payout);
+            p.add(payout);
+            house.addPayouts(payout);
+            house.pushPayout(payout);
+            ledger.emit(EventType.HOUSE_WINDOW_PAYOUT, GUARD_ID, "windowSum=" + house.payoutWindowSum());
+
+            BigDecimal betProfit = b.stake.subtract(payout, MC);
+            house.addProfit(betProfit);
+
+            byte[] traceBytes = deriveTraceBytes(reveal, drops, pt.digest(), board, b.kind, b.riskClass);
+            String trHash = hex(sha256(traceBytes));
+
+            b.settled = true;
+            b.settledAt = Instant.now();
+            b.payout = payout;
+            b.houseEdgeTaken = nominalEdge;
+            b.treasuryFee = treasuryFee;
+            b.jackpotFee = jackpotFee;
+            b.rebateFee = rebateFee;
+            b.resultLane = summarizeLane(drops, board);
+            b.traceHash = trHash;
+
+            ledger.emit(EventType.HOUSE_EDGE_TAKEN, HOUSE_ID, "bet=" + b.betId + " nominalEdge=" + nominalEdge);
+            ledger.emit(EventType.HOUSE_BANKROLL_CHANGED, HOUSE_ID, "bankroll=" + house.bankroll());
+            ledger.emit(EventType.BET_SETTLED, p.id, "bet=" + b.betId + " mult=" + rawMult + " payout=" + payout + " lane=" + b.resultLane + " trace=" + trHash + " table=" + pt.digest());
+
+            // move to settled map, remove from open
+            openBets.remove(b.betId);
+            settledBets.put(b.betId, b);
+
+            return b;
+        }
+
+        public Player getPlayer(String playerId) { bumpTurn(); return mustPlayer(playerId); }
+        public House getHouse() { bumpTurn(); return house; }
+        public List<Bet> openBets() { bumpTurn(); return new ArrayList<>(openBets.values()); }
+        public List<Event> tailEvents(int n) { bumpTurn(); return ledger.tail(n); }
+        public String sessionDigest() { bumpTurn(); return ledger.digest(); }
+        public String policyName() { bumpTurn(); return policy.name(); }
+
+        private void validateProposedBet(ProposedBet pb) {
+            if (pb == null) throw new MarbleFault(Code.INPUT_EMPTY, "bet is null");
+            if (pb.kind == null) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "kind required");
+            if (pb.risk == null) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "risk required");
+            if (pb.lanes < 3 || pb.lanes > 31) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "lanes out of range");
+            if (pb.lanes % 2 == 0) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "lanes must be odd");
+            if (pb.depth < 6 || pb.depth > 64) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "depth out of range");
+            if (pb.marbles < 1 || pb.marbles > 25) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "marbles out of range");
+            BigDecimal s = money2(nz(pb.stake));
+            requireRange(s, MIN_BET, MAX_BET, Code.BET_AMOUNT_RANGE, "stake out of range");
+            if (pb.memo != null && pb.memo.length() > MAX_NOTE_LEN) throw new MarbleFault(Code.INPUT_TOO_LONG, "memo too long");
+            if (pb.tags != null && pb.tags.size() > MAX_TAGS) throw new MarbleFault(Code.INPUT_BAD_FORMAT, "too many tags");
+        }
+
+        private Trace mintTrace(String playerId, ProposedBet pb) {
+            byte[] reveal = globalRng.nextBytes(TRACE_BYTES);
