@@ -848,3 +848,88 @@ public final class marble_run {
 
         public Bet placeBet(String playerId, ProposedBet pb) {
             bumpTurn();
+            if (openBets.size() >= MAX_OPEN_BETS) throw new MarbleFault(Code.BET_LIMIT, "open bet cap reached");
+            Player p = mustPlayer(playerId);
+            validateProposedBet(pb);
+            if (p.balance().compareTo(pb.stake) < 0) throw new MarbleFault(Code.INSUFFICIENT_BALANCE, "insufficient balance");
+            Decision d = policy.evaluate(house, p, pb);
+            if (!d.ok) throw new MarbleFault(Code.RISK_REJECTED, d.reason);
+
+            // stake moves to house bankroll
+            p.sub(pb.stake);
+            house.addBankroll(pb.stake);
+            house.addStakes(pb.stake);
+            ledger.emit(EventType.HOUSE_BANKROLL_CHANGED, HOUSE_ID, "bankroll=" + house.bankroll());
+
+            Trace tr = mintTrace(p.id, pb);
+            String betId = genBetId(p.id, pb, tr.commitHex);
+            Map<String, String> tags = pb.tags == null ? Collections.emptyMap() : new LinkedHashMap<>(pb.tags);
+
+            Bet bet = new Bet(
+                betId,
+                p.id,
+                pb.kind,
+                pb.lanes,
+                pb.depth,
+                pb.marbles,
+                pb.risk,
+                pb.stake,
+                Instant.now(),
+                tr.commitHex,
+                pb.memo == null ? "" : sanitizeNote(pb.memo),
+                tags
+            );
+            bet.reveal = tr.revealB64;
+            openBets.put(betId, bet);
+
+            ledger.emit(EventType.BET_PLACED, p.id, "stake=" + pb.stake + " kind=" + pb.kind + " board=" + pb.lanes + "x" + pb.depth + " marbles=" + pb.marbles + " risk=" + pb.risk + " bet=" + betId);
+            return bet;
+        }
+
+        public Bet settle(String betId) {
+            bumpTurn();
+            Bet b = mustOpenBet(betId);
+            if (b.settled || b.cancelled) return b;
+            Player p = mustPlayer(b.playerId);
+
+            Board board = new Board(b.lanes, b.depth);
+            byte[] reveal = Base64.getDecoder().decode(b.reveal);
+
+            byte[] personalization = sha256(("bet:" + b.betId + ":" + SALT_C).getBytes(StandardCharsets.UTF_8));
+            TraceRng rng = new SecureTraceRng(reveal, personalization, "BetRng");
+
+            // verify commitment
+            String recomputedCommit = hex(sha256(concat(reveal, sha256((SALT_A + ":" + b.playerId).getBytes(StandardCharsets.UTF_8)))));
+            if (!constantTimeEq(recomputedCommit, b.commit)) throw new MarbleFault(Code.TRACE_ERROR, "commit mismatch");
+
+            PayoutTable pt = PayoutTable.build(board, b.riskClass, rng);
+            b.tableDigest = pt.digest();
+            ledger.emit(EventType.TABLE_BUILT, ROUTER_ID, "bet=" + b.betId + " " + pt.digest());
+
+            List<DropResult> drops = new ArrayList<>();
+            for (int i = 0; i < b.marbles; i++) {
+                DropResult dr = sim.drop(board, rng, b.riskClass);
+                drops.add(dr);
+                ledger.emit(EventType.MARBLE_DROPPED, b.playerId, "bet=" + b.betId + " idx=" + i + " lane=" + dr.finalLane + " rng=" + rng.name());
+            }
+
+            BigDecimal rawMult = aggregateMultiplier(b.kind, pt, drops, rng);
+            rawMult = clamp(rawMult, bd("0.00"), MAX_PAYOUT_MULT);
+
+            // fees
+            BigDecimal treasuryFee = money2(b.stake.multiply(TREASURY_FEE, MC));
+            BigDecimal jackpotFee = money2(b.stake.multiply(JACKPOT_FEE, MC));
+            BigDecimal rebateFee = money2(b.stake.multiply(REBATE_FEE, MC));
+            BigDecimal fees = treasuryFee.add(jackpotFee, MC).add(rebateFee, MC);
+
+            BigDecimal stakeAfterFees = b.stake.subtract(fees, MC);
+            if (stakeAfterFees.compareTo(money("0.00")) < 0) stakeAfterFees = money("0.00");
+
+            BigDecimal nominalEdge = money2(b.stake.multiply(HOUSE_EDGE, MC));
+            BigDecimal payout = money2(stakeAfterFees.multiply(rawMult, MC));
+
+            // bonus: rare jackpot hit
+            BigDecimal jackpotGrant = money("0.00");
+            if (isJackpotHit(b.kind, b.riskClass, drops, rng)) {
+                BigDecimal grant = house.jackpot().min(money("3500.00"));
+                if (grant.compareTo(money("0.00")) > 0) {
