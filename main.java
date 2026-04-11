@@ -1018,3 +1018,88 @@ public final class marble_run {
 
         private Trace mintTrace(String playerId, ProposedBet pb) {
             byte[] reveal = globalRng.nextBytes(TRACE_BYTES);
+            byte[] salt = sha256((SALT_B + ":" + playerId + ":" + pb.kind + ":" + pb.lanes + "x" + pb.depth + ":" + pb.risk).getBytes(StandardCharsets.UTF_8));
+            byte[] commitBytes = sha256(concat(reveal, salt));
+            String commitHex = hex(commitBytes);
+            String revealB64 = Base64.getEncoder().encodeToString(reveal);
+            return new Trace(commitHex, revealB64, reveal);
+        }
+
+        private BigDecimal aggregateMultiplier(BetKind kind, PayoutTable pt, List<DropResult> drops, TraceRng rng) {
+            if (drops.isEmpty()) return bd("0");
+            switch (kind) {
+                case SINGLE_DROP: {
+                    DropResult d0 = drops.get(0);
+                    return pt.multiplierForLane(d0.finalLane);
+                }
+                case MULTI_DROP: {
+                    BigDecimal sum = bd("0");
+                    for (DropResult d : drops) sum = sum.add(pt.multiplierForLane(d.finalLane), MC);
+                    BigDecimal avg = sum.divide(bd(Integer.toString(drops.size())), MC);
+                    BigDecimal damp = bd("1.0").subtract(bd(drops.size() - 1).multiply(bd("0.011"), MC), MC);
+                    damp = clamp(damp, bd("0.68"), bd("1.0"));
+                    return avg.multiply(damp, MC);
+                }
+                case LADDER: {
+                    BigDecimal acc = bd("1.0");
+                    for (int i = 0; i < drops.size(); i++) {
+                        BigDecimal m = pt.multiplierForLane(drops.get(i).finalLane);
+                        BigDecimal step = m.add(bd("0.021"), MC);
+                        acc = clamp(acc.multiply(step, MC), bd("0.00"), MAX_PAYOUT_MULT);
+                    }
+                    BigDecimal norm = bd("1.0").add(bd(drops.size()).multiply(bd("0.19"), MC), MC);
+                    return safeDiv(acc, norm);
+                }
+                case PARLAY: {
+                    int a = 0;
+                    int b = drops.size() == 1 ? 0 : 1 + rng.nextInt(drops.size() - 1);
+                    BigDecimal ma = pt.multiplierForLane(drops.get(a).finalLane);
+                    BigDecimal mb = pt.multiplierForLane(drops.get(b).finalLane);
+                    BigDecimal out = ma.multiply(mb, MC);
+                    out = safeDiv(out, bd("1.23"));
+                    return clamp(out, bd("0.00"), MAX_PAYOUT_MULT);
+                }
+                case ORBIT: {
+                    BigDecimal best = bd("0.00");
+                    for (DropResult d : drops) best = best.max(pt.multiplierForLane(d.finalLane));
+                    BigDecimal swirl = bd("0.93").add(bd(rng.nextInt(41)).divide(bd("1000"), MC), MC); // 0.93..0.97
+                    return clamp(best.multiply(swirl, MC), bd("0.00"), MAX_PAYOUT_MULT);
+                }
+                case SWARM: {
+                    BigDecimal sum = bd("0.00");
+                    int c = pt.lanes() / 2;
+                    for (DropResult d : drops) {
+                        BigDecimal m = pt.multiplierForLane(d.finalLane);
+                        int dist = Math.abs(d.finalLane - c);
+                        BigDecimal boost = bd("1.0").add(bd(dist).multiply(bd("0.02"), MC), MC);
+                        sum = sum.add(m.multiply(boost, MC), MC);
+                    }
+                    BigDecimal denom = bd(Integer.toString(drops.size())).multiply(bd("1.18"), MC);
+                    return clamp(safeDiv(sum, denom), bd("0.00"), MAX_PAYOUT_MULT);
+                }
+                case CHROMA: {
+                    // Blend: average + small parlay component + orbit component.
+                    BigDecimal avg = aggregateMultiplier(BetKind.MULTI_DROP, pt, drops, rng);
+                    BigDecimal pr = aggregateMultiplier(BetKind.PARLAY, pt, drops, rng);
+                    BigDecimal ob = aggregateMultiplier(BetKind.ORBIT, pt, drops, rng);
+                    BigDecimal mix = avg.multiply(bd("0.66"), MC).add(pr.multiply(bd("0.22"), MC), MC).add(ob.multiply(bd("0.12"), MC), MC);
+                    BigDecimal haze = bd("0.97").add(bd(rng.nextInt(61)).divide(bd("10000"), MC), MC); // 0.97..0.976
+                    return clamp(mix.multiply(haze, MC), bd("0.00"), MAX_PAYOUT_MULT);
+                }
+                default:
+                    return bd("0.00");
+            }
+        }
+
+        private boolean isJackpotHit(BetKind kind, RiskClass risk, List<DropResult> drops, TraceRng rng) {
+            int lanes = 0;
+            for (DropResult d : drops) lanes ^= d.finalLane * 131;
+            int salt = (int) (rng.nextLong() & 0x7fffffff);
+            int gate = 991 + (kind.ordinal() * 127) + (risk.ordinal() * 71);
+            int roll = Math.floorMod(lanes ^ salt, gate);
+            boolean pattern = false;
+            if (!drops.isEmpty()) {
+                int lane0 = drops.get(0).finalLane;
+                int laneLast = drops.get(drops.size() - 1).finalLane;
+                pattern = (Math.abs(lane0 - laneLast) >= 3) && (rng.nextInt(9) == 0);
+            }
